@@ -1,0 +1,113 @@
+
+
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+from lxml import etree
+import time
+import pymysql
+from sqlalchemy import create_engine
+from urllib.parse import urlencode  # 编码 URL 字符串                                                                 
+
+start_time = time.time()  #计算程序运行时间
+
+def get_one_page(i): #获取网页
+    try:
+        headers = {
+            #'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36'
+
+        }
+        paras = {
+        'reportTime': '2017-12-31',
+        #可以改报告日期，比如2018-6-30获得的就是该季度的信息
+        'pageNum': i   #页码
+        }
+        url = 'http://s.askci.com/stock/a/?' + urlencode(paras)
+        response = requests.get(url,headers = headers)
+        if response.status_code == 200:
+            return response.text
+        return None
+    except RequestException:
+        print('爬取失败')
+
+
+def parse_one_page(html):  #解析网页
+    soup = BeautifulSoup(html,'lxml')
+    content = soup.select('#myTable04')[0] #[0]将返回的list改为bs4类型
+    tbl = pd.read_html(content.prettify(),header = 0)[0]
+    # prettify()优化代码,[0]从pd.read_html返回的list中提取出DataFrame
+    tbl.rename(columns = {'序号':'serial_number', '股票代码':'stock_code', '股票简称':'stock_abbre', '公司名称':'company_name', '省份':'province', '城市':'city', '主营业务收入(201712)':'main_bussiness_income', '净利润(201712)':'net_profit', '员工人数':'employees', '上市日期':'listing_date', '招股书':'zhaogushu', '公司财报':'financial_report', '行业分类':'industry_classification', '产品类型':'industry_type', '主营业务':'main_business'},inplace = True)
+
+    # print(tbl)
+    return tbl
+    # rename将中文名改为英文名，便于存储到mysql及后期进行数据分析
+    # tbl = pd.DataFrame(tbl,dtype = 'object') #dtype可统一修改列格式为文本
+
+
+#定义了generate_mysql()函数，用于在MySQL中wade数据库下生成一个listed_company的表。表格包含15个列字段。根据每列字段的属性，分别设置为INT整形（长度为30）、VARCHAR字符型(长度为30) 、DATETIME(0) 日期型等。
+#在Navicat中查看建立好之后的表格：
+
+def generate_mysql(): #生成数据库中
+    conn = pymysql.connect(
+        host='localhost',
+        user='root',
+        password='12345678',
+        port=3306,
+        charset = 'utf8',  
+        db = 'wade')
+    cursor = conn.cursor()
+
+    sql = 'CREATE TABLE IF NOT EXISTS listed_company (serial_number INT(20) NOT NULL,stock_code INT(20) ,stock_abbre VARCHAR(20) ,company_name VARCHAR(20) ,province VARCHAR(20) ,city VARCHAR(20) ,main_bussiness_income VARCHAR(20) ,net_profit VARCHAR(20) ,employees INT(20) ,listing_date DATETIME(0) ,zhaogushu VARCHAR(20) ,financial_report VARCHAR(20) , industry_classification VARCHAR(20) ,industry_type VARCHAR(100) ,main_business VARCHAR(200) ,PRIMARY KEY (serial_number))'
+    # listed_company是要在wade数据库中建立的表，用于存放数据
+    
+    cursor.execute(sql)
+    conn.close()
+    
+
+#往这个表中写入数据
+def write_to_sql(tbl, db = 'wade'): #写入数据库中
+    engine = create_engine('mysql+pymysql://root:12345678@localhost:3306/{0}?charset=utf8'.format(db))
+    try:
+        # df = pd.read_csv(df)
+        tbl.to_sql('listed_company2',con = engine,if_exists='append',index=False)
+        # append表示在原有表基础上增加，但该表要有表头
+    except Exception as e:
+        print(e)
+
+
+def main(page):
+    generate_mysql()
+    for i in range(1,page):  
+        html = get_one_page(i)
+        tbl = parse_one_page(html)
+        write_to_sql(tbl)
+        
+# # 单进程
+if __name__ == '__main__':  
+    main(178)
+
+    endtime = time.time()-start_time
+    print('程序运行了%.2f秒' %endtime)
+    
+
+# 多进程
+# from multiprocessing import Pool
+# if __name__ == '__main__':
+#   pool = Pool(4)
+#   pool.map(main, [i for i in range(1,178)])  #共有178页
+
+#   endtime = time.time()-start_time
+#   print('程序运行了%.2f秒' %(time.time()-start_time))
+
+
+'''
+程序输出
+
+(pymysql.err.DataError) (1265, "Data truncated for column 'main_bussiness_income' at row 9") [SQL: 'INSERT INTO listed_company2 (serial_number, stock_code, stock_abbre, company_name, province, city, main_bussiness_income, net_profit, employees, listing_date, zhaogushu, financial_report, industry_classification, industry_type, main_business) VALUES (%(serial_number)s, %(stock_code)s, %(stock_abbre)s, %(company_name)s, %(province)s, %(city)s, %(main_bussiness_income)s, %(net_profit)s, %(employees)s, %(listing_date)s, %(zhaogushu)s, %(financial_report)s, %(industry_classification)s, %(industry_type)s, %(main_business)s)'] [parameters: ({'serial_number': 21, 'stock_code': 25, 'stock_abbre': '特力A', 'company_name': '深圳市特力(集团)股份有限公司', 'province': '深圳市', 'city': '罗湖区', 'main_bussiness_income': '34723.73', 'net_profit': '6686.28', 'employees': 320, 'listing_date': '1993-06-21', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '汽车销售', 'industry_type': '能源、材料和机械电子设备批发', 'main_business': '汽车销售、汽车检测维修及配件销售、物业租赁及服务'}, {'serial_number': 22, 'stock_code': 26, 'stock_abbre': '飞亚达A', 'company_name': '飞亚达(集团)股份有限公司', 'province': '深圳市', 'city': '南山区', 'main_bussiness_income': '334580.97', 'net_profit': '14021.63', 'employees': 5362, 'listing_date': '1993-06-03', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '珠宝首饰', 'industry_type': '钟表', 'main_business': '主要从事钟表及其零配件的设计、开发、制造、销售和维修业务，包括"飞亚达"表的产品经营和世界名表的商业连锁销售'}, {'serial_number': 23, 'stock_code': 27, 'stock_abbre': '深圳能源', 'company_name': '深圳能源集团股份有限公司', 'province': '深圳市', 'city': '福田区', 'main_bussiness_income': '1554585.49', 'net_profit': '74933.82', 'employees': 5845, 'listing_date': '1993-09-03', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '火电', 'industry_type': '电力、燃气、蒸汽、运输', 'main_business': '各种常规能源和新能源的开发、生产、购销,以及城市固体废物处理、城市燃气供应和废水处理等'}, {'serial_number': 24, 'stock_code': 28, 'stock_abbre': '国药一致', 'company_name': '国药集团一致药业股份有限公司', 'province': '深圳市', 'city': '福田区', 'main_bussiness_income': '4126362.91', 'net_profit': '105779.19', 'employees': 22480, 'listing_date': '1993-08-09', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '医药商业', 'industry_type': '医药分销、医药零售', 'main_business': '药品的研发、生产，中西成药、中药材、生物制品、生化药品、保健品、医疗器械的批发销售和连锁零售。'}, {'serial_number': 25, 'stock_code': 29, 'stock_abbre': '深深房A', 'company_name': '深圳经济特区房地产(集团)股份有限公司', 'province': '深圳市', 'city': '罗湖区', 'main_bussiness_income': '134591.26', 'net_profit': '18498.85', 'employees': 1912, 'listing_date': '1993-09-15', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '房地产开发', 'industry_type': '房地产、工程施工、租赁、物业管理', 'main_business': '商品住宅销售、物业租赁及管理服务、酒店客房服务，以及建筑安装装修服务。'}, {'serial_number': 26, 'stock_code': 30, 'stock_abbre': '富奥股份', 'company_name': '富奥汽车零部件股份有限公司', 'province': '长春市', 'city': '绿园区', 'main_bussiness_income': '719326.31', 'net_profit': '83154.76', 'employees': 6968, 'listing_date': '1993-09-29', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '汽车零部件', 'industry_type': '零部件', 'main_business': '汽车零部件的生产与销售'}, {'serial_number': 27, 'stock_code': 31, 'stock_abbre': '中粮地产', 'company_name': '中粮地产(集团)股份有限公司', 'province': '深圳市', 'city': '宝安区', 'main_bussiness_income': '1404235.59', 'net_profit': '94533.11', 'employees': 3307, 'listing_date': '1993-10-08', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '房地产开发', 'industry_type': '住宅、商业物业、工业物业', 'main_business': '房地产开发、经营、销售、出租及管理住宅、商用物业、工业物业'}, {'serial_number': 28, 'stock_code': 32, 'stock_abbre': '深桑达A', 'company_name': '深圳市桑达实业股份有限公司', 'province': '深圳市', 'city': '南山区', 'main_bussiness_income': '172106.38', 'net_profit': '2637.12', 'employees': 1261, 'listing_date': '1993-10-28', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '电子物流', 'industry_type': '电子信息制造、电子商贸、房地产、电子物流', 'main_business': '电子制造、电子商贸、电子物流服务等在内的一体化现代电子信息服务。'}  ... displaying 10 of 20 total bound parameter sets ...  {'serial_number': 39, 'stock_code': 45, 'stock_abbre': '深纺织A', 'company_name': '深圳市纺织(集团)股份有限公司', 'province': '深圳市', 'city': '福田区', 'main_bussiness_income': '147554.57', 'net_profit': '5277.61', 'employees': 1335, 'listing_date': '1994-08-15', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '显示器件', 'industry_type': '物业及租赁、纺织品、偏光片、贸易', 'main_business': '以液晶显示用偏光片的研发、生产、营销为代表的高新技术产业,同时还有以地处深圳繁华商业区为主的物业经营管理业务及保留的高档纺织服装业务。'}, {'serial_number': 40, 'stock_code': 46, 'stock_abbre': '泛海控股', 'company_name': '泛海控股股份有限公司', 'province': '北京市', 'city': '东城区', 'main_bussiness_income': '838479.66', 'net_profit': '289131.87', 'employees': 10523, 'listing_date': '1994-09-12', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '房地产开发', 'industry_type': '房地产销售、商品销售、物业出租、物业管理、装修工程', 'main_business': '金融、房地产、战略投资等业务'})] (Background on this error at: http://sqlalche.me/e/9h9h)
+(pymysql.err.DataError) (1265, "Data truncated for column 'main_bussiness_income' at row 19") [SQL: 'INSERT INTO listed_company2 (serial_number, stock_code, stock_abbre, company_name, province, city, main_bussiness_income, net_profit, employees, listing_date, zhaogushu, financial_report, industry_classification, industry_type, main_business) VALUES (%(serial_number)s, %(stock_code)s, %(stock_abbre)s, %(company_name)s, %(province)s, %(city)s, %(main_bussiness_income)s, %(net_profit)s, %(employees)s, %(listing_date)s, %(zhaogushu)s, %(financial_report)s, %(industry_classification)s, %(industry_type)s, %(main_business)s)'] [parameters: ({'serial_number': 381, 'stock_code': 893, 'stock_abbre': '*ST东凌', 'company_name': '广州东凌国际投资股份有限公司', 'province': '广州市', 'city': '南沙区', 'main_bussiness_income': '153577.03', 'net_profit': '-238666.10', 'employees': 468, 'listing_date': '1998-12-24', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '航运', 'industry_type': '海运服务、谷物、钾肥', 'main_business': '钾盐开采、钾肥生产及销售、谷物贸易、国际船务、基础物流及投资。'}, {'serial_number': 382, 'stock_code': 895, 'stock_abbre': '双汇发展', 'company_name': '河南双汇投资发展股份有限公司', 'province': '漯河市', 'city': '源汇区', 'main_bussiness_income': '5044733.60', 'net_profit': '431929.99', 'employees': 53548, 'listing_date': '1998-12-10', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '肉制品', 'industry_type': '高温肉制品、低温肉制品、生鲜冻品', 'main_business': '畜禽屠宰，肉类食品的加工销售和食品包装'}, {'serial_number': 383, 'stock_code': 897, 'stock_abbre': '津滨发展', 'company_name': '天津津滨发展股份有限公司', 'province': '天津市', 'city': '滨海新区', 'main_bussiness_income': '97616.01', 'net_profit': '-11935.91', 'employees': 618, 'listing_date': '1999-04-22', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '房地产开发', 'industry_type': '商品销售、房屋租赁、房地产销售、物业管理', 'main_business': '房地产开发经营及贸易'}, {'serial_number': 384, 'stock_code': 898, 'stock_abbre': '鞍钢股份', 'company_name': '鞍钢股份有限公司', 'province': '鞍山市', 'city': '铁西区', 'main_bussiness_income': '8431000.00', 'net_profit': '560500.00', 'employees': 36104, 'listing_date': '1997-12-25', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '普钢', 'industry_type': '钢材产品', 'main_business': '黑色金属冶炼及钢压延加工。'}, {'serial_number': 385, 'stock_code': 899, 'stock_abbre': '赣能股份', 'company_name': '江西赣能股份有限公司', 'province': '南昌市', 'city': '青山湖区', 'main_bussiness_income': '212626.79', 'net_profit': '1645.01', 'employees': 646, 'listing_date': '1997-11-26', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '火电', 'industry_type': '发电及节能项目开发', 'main_business': '火力、水力发电'}, {'serial_number': 386, 'stock_code': 900, 'stock_abbre': '现代投资', 'company_name': '现代投资股份有限公司', 'province': '长沙市', 'city': '天心区', 'main_bussiness_income': '1059285.84', 'net_profit': '86493.23', 'employees': 2940, 'listing_date': '1999-01-28', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '高速公路', 'industry_type': '通行费、商品贸易', 'main_business': '高速公路收费业务'}, {'serial_number': 387, 'stock_code': 901, 'stock_abbre': '航天科技', 'company_name': '航天科技控股集团股份有限公司', 'province': '哈尔滨市', 'city': '平房区', 'main_bussiness_income': '580199.30', 'net_profit': '17028.00', 'employees': 6203, 'listing_date': '1999-04-01', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '仪器仪表', 'industry_type': '航天制造、仪表制造、环保服务、电力设备制造', 'main_business': '从事汽车电子、环保监测产品、航天产品、光机电测控及电网配套设备的研发、生产和销售等。'}, {'serial_number': 388, 'stock_code': 902, 'stock_abbre': '新洋丰', 'company_name': '湖北新洋丰肥业股份有限公司', 'province': '荆门市', 'city': '荆门市', 'main_bussiness_income': '903240.19', 'net_profit': '68015.07', 'employees': 6573, 'listing_date': '1999-04-08', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '复合肥', 'industry_type': '磷肥、常规复合肥、新型复合肥', 'main_business': '高浓度磷复肥和新型肥料的研发、生产和销售。'}  ... displaying 10 of 20 total bound parameter sets ...  {'serial_number': 399, 'stock_code': 916, 'stock_abbre': '华北高速', 'company_name': '华北高速公路股份有限公司', 'province': '北京市', 'city': '大兴区', 'main_bussiness_income': '--', 'net_profit': '--', 'employees': 996, 'listing_date': '1999-09-27', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '高速公路', 'industry_type': '交通运输、光伏发电', 'main_business': '投资经营收费公路和光伏电站'}, {'serial_number': 400, 'stock_code': 917, 'stock_abbre': '电广传媒', 'company_name': '湖南电广传媒股份有限公司', 'province': '长沙市', 'city': '开福区', 'main_bussiness_income': '874148.22', 'net_profit': '-46428.88', 'employees': 12807, 'listing_date': '1999-03-25', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '有线电视', 'industry_type': '有线网络业务、传媒内容业务、投资管理业务、旅游酒店业务、互联网新媒体业务', 'main_business': '从事影视节目制作、引进、发行、交换、译制，广告代理、策划、制作，信息传播等服务项目，经过多年的发展，公司主营业务形成了以有线电视网络与创投业务为核心，广告代理、影视节目内容制作、旅游、酒店与房地产业务为辅的产业布局。'})] (Background on this error at: http://sqlalche.me/e/9h9h)
+(pymysql.err.DataError) (1265, "Data truncated for column 'main_bussiness_income' at row 10") [SQL: 'INSERT INTO listed_company2 (serial_number, stock_code, stock_abbre, company_name, province, city, main_bussiness_income, net_profit, employees, listing_date, zhaogushu, financial_report, industry_classification, industry_type, main_business) VALUES (%(serial_number)s, %(stock_code)s, %(stock_abbre)s, %(company_name)s, %(province)s, %(city)s, %(main_bussiness_income)s, %(net_profit)s, %(employees)s, %(listing_date)s, %(zhaogushu)s, %(financial_report)s, %(industry_classification)s, %(industry_type)s, %(main_business)s)'] [parameters: ({'serial_number': 1741, 'stock_code': 300363, 'stock_abbre': '博腾股份', 'company_name': '重庆博腾制药科技股份有限公司', 'province': '重庆市', 'city': '长寿区', 'main_bussiness_income': '118408.88', 'net_profit': '10744.99', 'employees': 1784, 'listing_date': '2014-01-29', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '化学原料药', 'industry_type': '医药定制研发生产、多客户产品生产、医药化工商贸', 'main_business': '医药定制研发生产服务'}, {'serial_number': 1742, 'stock_code': 300364, 'stock_abbre': '中文在线', 'company_name': '中文在线数字出版集团股份有限公司', 'province': '北京市', 'city': '东城区', 'main_bussiness_income': '71677.96', 'net_profit': '7752.71', 'employees': 799, 'listing_date': '2015-01-21', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '平面媒体', 'industry_type': '数字阅读产品、数字出版运营服务、数字内容增值服务', 'main_business': '提供数字阅读产品、数字出版运营服务和数字内容增值服务'}, {'serial_number': 1743, 'stock_code': 300365, 'stock_abbre': '恒华科技', 'company_name': '北京恒华伟业科技股份有限公司', 'province': '北京市', 'city': '西城区', 'main_bussiness_income': '85574.75', 'net_profit': '19223.70', 'employees': 1126, 'listing_date': '2014-01-23', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '其他软件服务', 'industry_type': '软件服务、技术服务、软件销售、硬件销售、建造合同', 'main_business': '软件开发和技术服务'}, {'serial_number': 1744, 'stock_code': 300366, 'stock_abbre': '创意信息', 'company_name': '四川创意信息技术股份有限公司', 'province': '成都市', 'city': '青羊区', 'main_bussiness_income': '160941.69', 'net_profit': '17267.58', 'employees': 1190, 'listing_date': '2014-01-27', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '其他软件服务', 'industry_type': '电信级数据网络系统解决方案及技术服务', 'main_business': '电信级数据网络系统解决方案及技术服务'}, {'serial_number': 1745, 'stock_code': 300367, 'stock_abbre': '东方网力', 'company_name': '东方网力科技股份有限公司', 'province': '北京市', 'city': '海淀区', 'main_bussiness_income': '185472.29', 'net_profit': '38470.65', 'employees': 1426, 'listing_date': '2014-01-29', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '专用计算机设备', 'industry_type': 'PVG网络视频管理平台、网络硬盘录像机、前端设备、轨道交通信息系统、技术服务', 'main_business': '城市视频监控管理平台的研发、制造、销售及提供相关技术服务'}, {'serial_number': 1746, 'stock_code': 300368, 'stock_abbre': '汇金股份', 'company_name': '河北汇金机电股份有限公司', 'province': '石家庄市', 'city': '裕华区', 'main_bussiness_income': '62137.40', 'net_profit': '-16550.22', 'employees': 1845, 'listing_date': '2014-01-23', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '金融设备', 'industry_type': '现金处理及办公类设备、智能自助类终端设备、软件产品开发及销售、工业自动化设备及加工制造、运维服务及配件耗材销售', 'main_business': '为金融银行业提供软件、硬件整体解决方案'}, {'serial_number': 1747, 'stock_code': 300369, 'stock_abbre': '绿盟科技', 'company_name': '北京神州绿盟信息安全科技股份有限公司', 'province': '北京市', 'city': '海淀区', 'main_bussiness_income': '125511.07', 'net_profit': '15236.77', 'employees': 2192, 'listing_date': '2014-01-29', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '行业应用软件', 'industry_type': '信息安全行业', 'main_business': '信息安全产品的研发、生产、销售及提供专业安全服务'}, {'serial_number': 1748, 'stock_code': 300370, 'stock_abbre': '安控科技', 'company_name': '北京安控科技股份有限公司', 'province': '北京市', 'city': '海淀区', 'main_bussiness_income': '176637.10', 'net_profit': '10625.12', 'employees': 1517, 'listing_date': '2014-01-23', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '油气服务、智慧产业、自动化', 'industry_type': '分自动化业务、油气服务业务、智慧产业业务', 'main_business': '以自动化、信息化技术为核心的智慧产业解决方案和产品的研发、生产、销售及运营。'}  ... displaying 10 of 20 total bound parameter sets ...  {'serial_number': 1759, 'stock_code': 300381, 'stock_abbre': '溢多利', 'company_name': '广东溢多利生物科技股份有限公司', 'province': '珠海市', 'city': '香洲区', 'main_bussiness_income': '149926.33', 'net_profit': '8042.43', 'employees': 2759, 'listing_date': '2014-01-28', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '生物医药', 'industry_type': '生物医药产品、生物酶制剂产品', 'main_business': '从事饲用酶制剂产品研发、生产和销售，生物医药产品研发、生产和销售。'}, {'serial_number': 1760, 'stock_code': 300382, 'stock_abbre': '斯莱克', 'company_name': '苏州斯莱克精密设备股份有限公司', 'province': '苏州市', 'city': '吴中区', 'main_bussiness_income': '54857.82', 'net_profit': '13647.50', 'employees': 606, 'listing_date': '2014-01-29', 'zhaogushu': '--', 'financial_report': None, 'industry_classification': '其他专用机械', 'industry_type': '易拉盖高速生产设备及系统改造、易拉罐高速生产设备及系统改造、智能检测设备、易拉盖、罐高速生产设备零备件、光伏发电及其他', 'main_business': '高速易拉盖生产设备的研发、设计、生产、装配调试及相关精密模具、零备件的研发、加工制造'})] (Background on this error at: http://sqlalche.me/e/9h9h)
+程序运行了93.32秒
+[Finished in 94.0s]
+
+'''
